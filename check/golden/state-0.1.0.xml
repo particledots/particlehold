@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<particlehold pluginVersion="0.1.0">
+  <PARAM id="clock" value="0.0"/>
+  <PARAM id="clockOn" value="0.0"/>
+  <PARAM id="level" value="0.0"/>
+  <PARAM id="mode" value="1.0"/>
+  <PARAM id="noiseOn" value="1.0"/>
+  <PARAM id="outChannel" value="10.0"/>
+  <PARAM id="range" value="1.0"/>
+  <PARAM id="rate" value="11.11111164093018"/>
+  <PARAM id="rectify" value="1.0"/>
+  <PARAM id="sendAs" value="2.0"/>
+  <PARAM id="signalOn" value="0.0"/>
+  <PARAM id="slew" value="146.586669921875"/>
+  <PARAM id="source" value="2.0"/>
+  <PARAM id="sourceCc" value="59.0"/>
+  <PARAM id="trigger" value="1.0"/>
+</particlehold>

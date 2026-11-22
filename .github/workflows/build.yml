@@ -1,0 +1,310 @@
+name: Build particlehold
+
+# Runs automatically every time code is pushed, and can also be started by hand
+# from the Actions tab ("Run workflow").
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  engine-test:
+    name: Engine self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run the engine test
+        run: |
+          set +e
+          ( cmake -S . -B build-test -DPARTICLEHOLD_BUILD_PLUGIN=OFF -DCMAKE_BUILD_TYPE=Release \
+            && cmake --build build-test -j 4 \
+            && ctest --test-dir build-test -R engine --output-on-failure -V ) > engine-test.log 2>&1
+          code=$?
+          tail -n 40 engine-test.log
+          # Result is also written as annotations (shown on the run page and readable through the API).
+          if [ $code -ne 0 ]; then
+            echo "::error::ENGINE-TEST: failed (exit code $code)"
+            grep -E "error|FAIL|engine tests:" engine-test.log | head -15 | while IFS= read -r line; do echo "::error::ENGINE-TEST: $line"; done
+            exit 1
+          fi
+          echo "::notice::ENGINE-TEST: $(grep -h 'engine tests:' engine-test.log | head -n 1)"
+          echo "::notice::TIMING: $(grep -h 'timing:' engine-test.log | head -n 1)"
+          echo "::notice::NO-JUMP: $(grep -h 'no jump:' engine-test.log | head -n 1)"
+          echo "::notice::FUZZ: $(grep -h 'stuck-gate and stuck-note fuzz' engine-test.log | head -n 1)"
+          echo "::notice::CPU: $(grep -ho 'CPU: .*' engine-test.log | head -n 1)"
+          echo "::notice::MIDI: $(grep -ho 'MIDI: .*' engine-test.log | head -n 1)"
+
+  mapper-test:
+    name: Mapper test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the real mapper script on the engine's real MIDI stream
+        run: |
+          set +e
+          node --version
+          ( cmake -S . -B build-test -DPARTICLEHOLD_BUILD_PLUGIN=OFF -DCMAKE_BUILD_TYPE=Release \
+            && cmake --build build-test --target particlehold_ccdump -j 4 \
+            && ctest --test-dir build-test -R mapper --output-on-failure -V ) > mapper-test.log 2>&1
+          code=$?
+          tail -n 30 mapper-test.log
+          if [ $code -ne 0 ] || ! grep -q "mapper tests: .* checks passed" mapper-test.log; then
+            echo "::error::MAPPER-TEST: failed (exit code $code)"
+            grep -E "error|FAIL|mapper tests:" mapper-test.log | head -15 | while IFS= read -r line; do echo "::error::MAPPER-TEST: $line"; done
+            exit 1
+          fi
+          echo "::notice::MAPPER-TEST: $(grep -h 'mapper tests:' mapper-test.log | head -n 1)"
+
+  plugin-check:
+    name: Plugin-layer check (no host)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run particleholdCheck
+        run: |
+          set +e
+          ( sudo apt-get update \
+            && sudo apt-get install -y libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxext-dev \
+                 libfreetype-dev libfontconfig1-dev libgl1-mesa-dev \
+            && cmake -S . -B build-check -DPARTICLEHOLD_BUILD_PLUGIN=OFF -DPARTICLEHOLD_BUILD_TESTS=OFF -DPARTICLEHOLD_BUILD_CHECK=ON -DCMAKE_BUILD_TYPE=Release \
+            && cmake --build build-check --target particleholdCheck -j 4 \
+            && BIN=$(find build-check -type f -name particleholdCheck -perm -u+x | head -n 1) \
+            && echo "running $BIN" && "$BIN" ) > plugin-check.log 2>&1
+          code=$?
+          tail -n 30 plugin-check.log
+          if [ $code -ne 0 ]; then
+            echo "::error::PLUGIN-CHECK: failed (exit code $code)"
+            grep -E "error|FAIL|plugin checks:" plugin-check.log | head -15 | while IFS= read -r line; do echo "::error::PLUGIN-CHECK: $line"; done
+            exit 1
+          fi
+          echo "::notice::PLUGIN-CHECK: $(grep -h 'plugin checks:' plugin-check.log | head -n 1)"
+          grep -h 'stuck-gate' plugin-check.log | while IFS= read -r line; do echo "::notice::PLUGIN-CHECK: $line"; done
+          BIN=$(find build-check -type f -name particleholdCheck -perm -u+x | head -n 1)
+          "$BIN" --snapshot window-pictures > /dev/null 2>&1 || echo "::warning::PLUGIN-CHECK: could not draw the window pictures"
+
+      - name: Upload the window pictures
+        uses: actions/upload-artifact@v4
+        with:
+          name: particlehold-window-pictures
+          path: window-pictures/*.png
+          if-no-files-found: warn
+
+  build-macos:
+    name: Build AU + VST3 (macOS)
+    runs-on: macos-26     # Apple silicon runner; macos-14 is retired by GitHub on 2 Nov 2026
+    permissions:
+      contents: write     # only to put the finished package into a private draft release (last step)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          set +e
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPARTICLEHOLD_BUILD_TESTS=OFF > configure.log 2>&1; code=$?
+          tail -n 20 configure.log
+          if [ $code -ne 0 ]; then
+            echo "::error::CONFIGURE: failed (exit code $code)"
+            grep -iE "error" configure.log | head -10 | while IFS= read -r line; do echo "::error::CONFIGURE: $line"; done
+            exit 1
+          fi
+
+      - name: Build AU and VST3
+        run: |
+          set +e
+          cmake --build build --config Release --target particlehold_AU particlehold_VST3 -j 4 > build.log 2>&1; code=$?
+          tail -n 30 build.log
+          if [ $code -ne 0 ]; then
+            echo "::error::BUILD: failed (exit code $code)"
+            grep -E "error:|Error " build.log | head -15 | while IFS= read -r line; do echo "::error::BUILD: $line"; done
+            exit 1
+          fi
+          echo "::notice::BUILD: AU and VST3 compiled"
+
+      - name: Locate the built plugins
+        id: find
+        run: |
+          AU=$(find build -type d -name "particlehold.component" | head -n 1)
+          VST3=$(find build -type d -name "particlehold.vst3" | head -n 1)
+          echo "AU:   $AU"
+          echo "VST3: $VST3"
+          test -n "$AU"   || { echo "AU bundle not found";   exit 1; }
+          test -n "$VST3" || { echo "VST3 bundle not found"; exit 1; }
+          echo "au=$AU"     >> "$GITHUB_OUTPUT"
+          echo "vst3=$VST3" >> "$GITHUB_OUTPUT"
+
+      - name: Check the build is universal (Apple Silicon + Intel)
+        run: |
+          lipo -archs "${{ steps.find.outputs.au }}/Contents/MacOS/particlehold"
+          lipo -archs "${{ steps.find.outputs.vst3 }}/Contents/MacOS/particlehold"
+          lipo -archs "${{ steps.find.outputs.au }}/Contents/MacOS/particlehold" | grep -q "x86_64" && lipo -archs "${{ steps.find.outputs.au }}/Contents/MacOS/particlehold" | grep -q "arm64" \
+            || { echo "::error::UNIVERSAL: the AU is not universal"; exit 1; }
+          echo "::notice::UNIVERSAL: $(lipo -archs "${{ steps.find.outputs.au }}/Contents/MacOS/particlehold")"
+
+      - name: Sign (ad-hoc, so Apple Silicon Macs will load it)
+        run: |
+          codesign --force --deep --sign - "${{ steps.find.outputs.au }}"
+          codesign --force --deep --sign - "${{ steps.find.outputs.vst3 }}"
+          codesign --verify --deep --strict --verbose=2 "${{ steps.find.outputs.au }}"
+          codesign --verify --deep --strict --verbose=2 "${{ steps.find.outputs.vst3 }}"
+
+      - name: Apple's AU validator (auval)
+        continue-on-error: true
+        run: |
+          mkdir -p "$HOME/Library/Audio/Plug-Ins/Components"
+          cp -R "${{ steps.find.outputs.au }}" "$HOME/Library/Audio/Plug-Ins/Components/"
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          sleep 3
+          auval -v aumi Phld Pdot > auval.log 2>&1; code=$?
+          tail -n 20 auval.log
+          # Result is also written as annotations (shown on the run page and readable through the API).
+          if grep -q "AU VALIDATION SUCCEEDED" auval.log; then
+            echo "::notice::AUVAL: AU VALIDATION SUCCEEDED"
+          else
+            echo "::error::AUVAL: did not succeed (auval exit code $code)"
+            grep -iE "fail|error|cannot|not found" auval.log | head -8 | while IFS= read -r line; do echo "::error::AUVAL: $line"; done
+            exit 1
+          fi
+
+      # pluginval (Tracktion's open-source plugin validator) checks the AU and the VST3 the way hosts use them: loading,
+      # parameters, saving and restoring state, different buffer sizes and sample rates. It never fails the build;
+      # its verdict is written as annotations and as logs inside the package.
+      - name: pluginval (AU and VST3)
+        continue-on-error: true
+        timeout-minutes: 20
+        run: |
+          set +e
+          curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q -o pluginval.zip -d pluginval-bin
+          PV="$(find pluginval-bin -type f -name pluginval -perm -u+x | head -n 1)"
+          echo "pluginval binary: $PV"
+          test -n "$PV" || { echo "::warning::PLUGINVAL: could not download pluginval"; exit 0; }
+          "$PV" --version 2>&1 | head -n 1 | while IFS= read -r line; do echo "::notice::PLUGINVAL version: $line"; done
+          for kind in AU VST3; do
+            if [ "$kind" = "AU" ]; then TARGET="$HOME/Library/Audio/Plug-Ins/Components/particlehold.component"; else TARGET="${{ steps.find.outputs.vst3 }}"; fi
+            "$PV" --strictness-level 5 "$TARGET" > "pluginval-$kind.log" 2>&1; code=$?
+            tail -n 25 "pluginval-$kind.log"
+            if [ $code -eq 0 ]; then
+              echo "::notice::PLUGINVAL $kind: passed at strictness level 5"
+            else
+              echo "::error::PLUGINVAL $kind: failed (exit code $code)"
+              grep -iE "fail|error|crash|assert" "pluginval-$kind.log" | head -12 | while IFS= read -r line; do echo "::error::PLUGINVAL $kind: $line"; done
+            fi
+          done
+          exit 0
+
+      - name: Package
+        run: |
+          mkdir -p particlehold-macOS
+          cp -R "${{ steps.find.outputs.au }}"   particlehold-macOS/
+          cp -R "${{ steps.find.outputs.vst3 }}" particlehold-macOS/
+          cp auval.log particlehold-macOS/auval.log 2>/dev/null || true
+          cp pluginval-AU.log pluginval-VST3.log particlehold-macOS/ 2>/dev/null || true
+          cat > particlehold-macOS/INSTALL.txt <<'TXT'
+          PARTICLEHOLD 0.1.0: install and set up
+
+          INSTALL (once per Mac)
+          1. Unzip.
+          2. Open Terminal and run:   xattr -dr com.apple.quarantine ~/Downloads/particlehold-macOS/*
+             (adjust the path if you unzipped elsewhere; this clears the "downloaded from internet" block)
+          3. Double-click Install-Unofficial-Plugin.command in this folder. It asks for your Mac password once and
+             installs the Audio Unit (particlehold.component) for all users. It does not install the VST3.
+          4. Open Logic. If particlehold is missing: Settings > Plug-in Manager, select particlehold,
+             Reset & Rescan Selection.
+
+          FIRST TRY (no mapper needed)
+          5. Make a Software Instrument track. Click an empty MIDI FX slot (above the instrument):
+             Audio Units > particledots > particlehold. Play: your notes sound as normal, and each new note takes a
+             new random value. The panel shows it (the scope, the big light and the number), and the Signal and Clock
+             lights flash.
+
+          THE MAPPER (once per Mac)
+          Logic has no CV, so particlehold sends its values as MIDI CC, and a Scripter script turns them into knob moves.
+          6. On that track, in the MIDI FX slot below particlehold: Scripter.
+          7. In Scripter, click "Open Script in Editor". Select everything in the editor and delete it.
+          8. Open "particlehold Mapper (paste into Scripter).txt" from this folder, select all, copy, paste it into the
+             Script Editor, click "Run Script", and close the editor.
+          9. In Scripter's preset menu (top of its window) choose "Save As..." and call it particlehold Mapper.
+             From now on "particlehold Mapper" is in Scripter's preset menu on this Mac.
+
+          EACH TRACK
+          10. MIDI FX slot: particlehold. A slot below it: Scripter with the particlehold Mapper preset.
+          11. In Scripter: set "Lane 1 source" to Signal. Open "Lane 1 target", choose "Learn plug-in parameter",
+              then move once the knob you want particlehold to move (for example the instrument's filter cutoff).
+          12. "Lane 1 min %" and "Lane 1 max %" set how far that knob sweeps (max below min turns it upside down).
+              With the rectifier off, 0 V is the middle of that sweep: values go both ways from it. With the
+              rectifier on, 0 V is Min: values only go up from it.
+          Up to 8 lanes per Scripter; for more, add a second Scripter with the same preset below the first.
+          13. Noise as a lane source follows the white noise (switch the Noise output on first). Clock as a lane
+              source jumps the knob from Min to Max while the clock is high (it needs "Send as" on CC or Both).
+          particlehold's CC (channel 13: CC 75, 76, 77, 78 and 79) stops at the mapper; your notes and everything
+          else pass through.
+
+          SHARING A TRACK WITH BRYN, HILLSIDE, OGDOAD AND STRANGE DRIFT
+          Each mapper only takes its own plugin's CC. Put the plugins first and all the mappers below them, in any
+          order. particlehold only hears what comes from above it: put it below a plugin whose output you want to
+          sample (Source CC, for example CC 20 for Ogdoad's LFO 1, or CC 80 for Bryn's Function), always above the
+          mappers. Trigger notes from a plugin above (Ogdoad's, Bryn's gates with Send as Note) clock it too.
+
+          THE CLOCK OUTPUT (no mapper needed for notes)
+          - High while the clock is high (the internal clock's first half of each tick, the held notes, or the
+            Trigger button), at least 20 ms.
+          - Send as: CC (CC 79, for the mapper), Note (note C2 = 48 on channel 13, velocity 100: it plays the
+            instrument, for example a drum pad), or Both.
+
+          GOOD TO KNOW
+          - Mode: Sample and hold takes a new value at each new note (or clock tick). Hold and track follows the
+            input while the note is held, then holds the value it had when the note ended.
+          - Clock: Notes (your notes, the default), Internal (Rate and Range: Low 0.05 to 4 Hz, High 0.5 to 40 Hz),
+            or Button only. The round Trigger button works with all three.
+          - A chord is one new value. A note played while another is still held (legato) is not a new value.
+          - Source: Noise (the default), CC (the Source CC number; 1 is the mod wheel), Aftertouch, Pitch bend or
+            Velocity. A controller's middle (64) counts as 0 V.
+          - Level scales the input towards 0 V. The rectifier flips everything below 0 V upward.
+          - Slew: Off, or 5 ms to 10 s: each new value is reached by a glide that takes that long, whatever the jump.
+          - Stop, bypass and Logic resetting the plugin send Signal and Noise to 0 V and end the Clock. With the
+            internal clock the next tick comes half a tick later. The Noise output runs on whenever Logic runs it.
+          - Glides of about 50 ms or longer move a knob smoothly; every new value without a slew arrives exactly,
+            up to the fastest clock (40 Hz).
+          TXT
+          cp "tools/mapper/particlehold-Mapper.js" "particlehold-macOS/particlehold Mapper (paste into Scripter).txt"
+          # Easy installer for Logic (double-click; same file in every plugin, unchanged)
+          cp tools/install/Install-Unofficial-Plugin.command particlehold-macOS/
+          chmod +x particlehold-macOS/Install-Unofficial-Plugin.command
+          [ -x particlehold-macOS/Install-Unofficial-Plugin.command ] || { echo "::error::PACKAGE missing Install-Unofficial-Plugin.command"; exit 1; }
+          [ "$(md5 -q particlehold-macOS/Install-Unofficial-Plugin.command)" = "959ac29d9ae17571e61e8dc21870c93e" ] \
+            || { echo "::error::PACKAGE the installer differs from the shared particledots installer"; exit 1; }
+          [ -f "particlehold-macOS/particlehold Mapper (paste into Scripter).txt" ] || { echo "::error::PACKAGE missing the mapper"; exit 1; }
+          grep -q "THE MAPPER" particlehold-macOS/INSTALL.txt || { echo "::error::PACKAGE INSTALL.txt has no mapper steps"; exit 1; }
+          ditto -c -k --keepParent particlehold-macOS particlehold-macOS.zip
+          ls -l particlehold-macOS particlehold-macOS.zip
+          # Package contents are also written as annotations (readable through the API).
+          echo "::notice::PACKAGE archs: $(lipo -archs particlehold-macOS/particlehold.component/Contents/MacOS/particlehold)"
+          echo "::notice::PACKAGE installer: identical to the shared particledots installer"
+          unzip -Z particlehold-macOS.zip | grep -E "Install-Unofficial|INSTALL.txt|auval.log|pluginval|Mapper|Contents/MacOS/particlehold$" | while IFS= read -r line; do echo "::notice::ZIP: $line"; done
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: particlehold-macOS
+          path: particlehold-macOS.zip
+          if-no-files-found: error
+
+      # A second way to get the package, besides the Actions page: a private DRAFT release (only people with
+      # access to the repo can see it) holding the same zip. Older drafts of this kind are removed first.
+      # A failure here never fails the build.
+      - name: Private draft release with the package
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for id in $(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq '.[] | select(.draft and (.name | startswith("particlehold test build"))) | .id'); do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+          done
+          gh release create "test-build-${GITHUB_RUN_NUMBER}" particlehold-macOS.zip --draft --target "$GITHUB_SHA" \
+            --title "particlehold test build ${GITHUB_RUN_NUMBER} (${GITHUB_SHA::7})" \
+            --notes "Same package as the particlehold-macOS artifact of this run. Draft: not public."
+          echo "::notice::DRAFT-RELEASE: created test-build-${GITHUB_RUN_NUMBER}"

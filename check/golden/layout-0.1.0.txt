@@ -1,0 +1,15 @@
+0 mode v1 | Mode | range 0.000..1.000 step 1.000 | default 0.000 | centre 0.000 | choices Sample and hold;Hold and track
+1 level v1 | Level | range 0.000..100.000 step 0.000 | default 100.000 | centre 50.000
+2 rectify v1 | Rectifier | range 0.000..1.000 step 1.000 | default 0.000 | centre 1.000 | switch
+3 slew v1 | Slew | range 0.000..10000.000 step 0.000 | default 0.000 | centre 223.607
+4 rate v1 | Rate | range 0.000..100.000 step 0.000 | default 50.000 | centre 50.000
+5 range v1 | Range | range 0.000..1.000 step 1.000 | default 0.000 | centre 0.000 | choices Low;High
+6 clock v1 | Clock | range 0.000..2.000 step 1.000 | default 1.000 | centre 1.000 | choices Internal;Notes;Button only
+7 source v1 | Source | range 0.000..4.000 step 1.000 | default 0.000 | centre 2.000 | choices Noise;CC;Aftertouch;Pitch bend;Velocity
+8 sourceCc v1 | Source CC | range 0.000..127.000 step 1.000 | default 1.000 | centre 64.000
+9 trigger v1 | Trigger button | range 0.000..1.000 step 1.000 | default 0.000 | centre 1.000 | switch
+10 outChannel v1 | MIDI out channel | range 1.000..16.000 step 1.000 | default 13.000 | centre 8.000
+11 signalOn v1 | Signal out | range 0.000..1.000 step 1.000 | default 1.000 | centre 1.000 | switch
+12 noiseOn v1 | Noise out | range 0.000..1.000 step 1.000 | default 0.000 | centre 1.000 | switch
+13 clockOn v1 | Clock out | range 0.000..1.000 step 1.000 | default 1.000 | centre 1.000 | switch
+14 sendAs v1 | Send as | range 0.000..2.000 step 1.000 | default 0.000 | centre 1.000 | choices CC;Note;Both
