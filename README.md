@@ -6,7 +6,8 @@ Instruō tágh (legacy version), a sample and hold module. It is not a copy, con
 not affiliated with Instruō. The tágh is an analog module with no published firmware; its manual was used only to
 understand what the controls do. The maths is our own. It follows Bryn and reuses its engine.
 
-Status: **version 0.1.0, milestone 1 (the only milestone) built; waiting to be tested in Logic on both Macs.**
+Status: **version 0.1.0, finished.** Tested in Logic on 2026-11-22 on both Macs (Apple Silicon M4 and Intel): every
+step of the test worked as described. One milestone was enough.
 
 ## What it does
 

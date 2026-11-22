@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.1.0 (milestone 1, built; waiting to be tested in Logic)
+## 0.1.0 (finished, 2026-11-22)
+
+- Tested in Logic on both Macs (Apple Silicon M4 and Intel), all 9 steps worked as described: install, notes and
+  chords taking new values with the scope and the LED, the mapper moving a filter cutoff, the slew gliding, hold and
+  track wandering while held and freezing on release, the internal clock stepping on its own, Send as Note (C2) with
+  nothing left sounding after Stop, the settings, mapper lane and window size restored with a saved project, and
+  Logic's CPU meter on the Intel Mac with the Noise output and a second mapper lane running. One milestone was enough.
+- Automatic checks (GitHub run 45070522103): engine test 248 checks, mapper test 1,975, plugin-layer check 264, none
+  failed; auval passed as a MIDI effect; pluginval passed at strictness 5 (AU and VST3); universal binary.
+
 
 - First build: repo layout, build workflow (engine self-test, mapper test, plugin-layer check with window pictures,
   universal AU + VST3, ad-hoc signing, auval as a MIDI effect, pluginval, package with the shared installer,
